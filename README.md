@@ -38,6 +38,8 @@ to your Azure Percept DK. The flow for doing that would be this:
   you could package your model up with your custom azureeyemodule and then have the custom program run it directly. You could also
   have it pull down a model through the module twin (again, see the azureeyemodule folder for more details).
 
+See the [tutorials](tutorials/README.md) for detailed walkthroughs on how to do this.
+
 ## Contributing
 
 This repository follows the [Microsoft Code of Conduct](https://opensource.microsoft.com/codeofconduct).
