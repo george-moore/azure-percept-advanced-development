@@ -76,3 +76,15 @@ PC to the Azure Percept DK. You could instead port the model directly into the a
 but, being an embedded device, the Azure Percept DK is not a great tool for going through debugging cycles.
 
 So let's port this main.cpp file into the Mock Eye Module and make sure it works there before we port it all the way over to the device.
+
+If you look at the mock-eye-module directory, you can see it contains a C++ application that can be compiled and run using
+Docker. Let's build it and run it before making any changes to it, just to make sure it works.
+
+### Unix
+
+If you are on Linux (I don't have Mac, so I can't test it, but it probably works too), run the following:
+
+```bash
+# Make sure you are in the mock-eye-module directory
+./scripts/compile_and_test.sh
+```
