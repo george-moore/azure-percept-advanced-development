@@ -44,11 +44,12 @@ to whatever image size is expected by the network. So we don't really need to wo
 We use an Intel Myriad X VPU for neural network acceleration on the Azure Percept DK. If your neural network is too large,
 it won't fit in the VPU memory, and your network will run extremely slowly.
 
-Specifically, the device has 4GB of RAM, so we should make sure that our neural networks are smaller than that.
+Specifically, the device has an upper limit of 165 MB for a neural network .blob file.
 
-Note that we typically do not quantize our networks on this device. So, this network is 6.686x10^6 parameters,
+Note that this device does not allow for int8 quantization schemes, though we can use FP16. Let's assume
+we go with FP32 just to see though, since this network is 6.686x10^6 parameters,
 multiply this by four bytes per parameter, and we get 26,744,000 bytes, or about 26 MB. This network is easily small
-enough to fit in our device.
+enough to fit in our device, even if we use FP32. FP16 will halve that size.
 
 ## Example Code
 
