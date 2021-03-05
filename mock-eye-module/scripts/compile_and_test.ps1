@@ -12,13 +12,13 @@
   Docker container's filesystem. Inside the container, we compile the source
   code and run the resulting application.
 
-  .PARAMETER Debug
-  If given, we compile the application in Debug mode and drop you into a GDB session.
+  This script has several dependencies. See the README in the mock-eye-module directory.
 
-  .PARAMETER Device
-  Must be one of "NCS2", "GPU", or "CPU". Defaults to "CPU".
-  NCS2 is an Intel Neural Compute Stick 2, which should be plugged into the USB slot on the PC.
-  GPU is a supported GPU.
+  .PARAMETER Ipaddr
+  Your host PC's IP address. Needed for the XServer forwarding.
+
+  .PARAMETER DebugMode
+  If given, we compile the application in Debug mode and drop you into a GDB session.
 
   .PARAMETER Labels
   The label file for the neural network. Not all models will require this.
@@ -44,12 +44,12 @@
 #>
 
 param (
-    [Alias('g')][switch]$debug = $False,
-    [Alias('d')][ValidateSet("NCS2", "GPU", "CPU")][string]$device = "CPU",
+    [Alias('i')][Parameter(Mandatory=$true)][string]$ipaddr,
+    [Alias('g')][switch]$debugmode = $False,
     [Alias('l')][ValidateScript({Test-Path $_ -PathType "Leaf"})][string]$labels,
     [Alias('p')][string]$parser = "ssd100",
     [Alias('v')][ValidateScript({Test-Path $_ -PathType "Leaf"})][string]$video,
-    [Alias('x')][ValidateScript({Test-Path $_ -PathType "Leaf"})][string]$xml
+    [Alias('x')][Parameter(Mandatory=$true)][ValidateScript({Test-Path $_ -PathType "Leaf"})][string]$xml
 )
 
 # Exit on errors
@@ -72,19 +72,19 @@ $xmlfile = "/home/openvino/tmp/model.xml"
 $videofile = "/home/openvino/tmp/movie.mp4"
 
 # Now create the tmp directory and copy everything into it
-New-Item -Type Dirctory -Name tmp
+New-Item -Type Directory -Name tmp
 Copy-Item -Recurse kernels tmp/
 Copy-Item -Recurse modules tmp/
 Copy-Item main.cpp tmp/
 Copy-Item CMakeLists.txt tmp/
 
 # For each of these files, if they exist, copy them into the temp directory.
-if (Test-Path $labels) {
+if ($labels) {
     $path = "tmp/labels.txt"
     Copy-Item $labels $path
 }
 
-if (Test-Path $video) {
+if ($video) {
     $path = "tmp/movie.mp4"
     Copy-Item $video $path
 }
@@ -97,10 +97,13 @@ if (Test-Path $xml) {
 if (Test-Path $bin) {
     $path = "tmp/model.bin"
     Copy-Item $bin $path
+} else {
+    Write-Host "Need a .bin file that is the same name as the .xml file and in the same place."
+    Exit 2
 }
 
 # Put together the command, based on whether we want webcam or not.
-$appcmd = "./mock_eye_app --device " + $device + " --parser=" + $parser + " --weights=" + $weightfile + " --xml=" + $xmlfile + " --show"
+$appcmd = "./mock_eye_app --device CPU --parser=" + $parser + " --weights=" + $weightfile + " --xml=" + $xmlfile + " --show"
 if (Test-Path $video -PathType "Leaf") {
     $appcmd += " --video_in=" + $videofile
 }
@@ -108,7 +111,7 @@ if (Test-Path $video -PathType "Leaf") {
 # Should we debug?
 $debug_docker_cmd = ""
 $buildtype = ""
-if ($debug) {
+if ($debugmode) {
     $appcmd = "gdb --args " + $appcmd
     $debug_docker_cmd = "-it"
     $buildtype = "Debug"
@@ -126,16 +129,17 @@ $dockercmd += "make && "
 $dockercmd += $appcmd
 Write-Host $dockercmd
 
+# Set up the windowing system
+$display = ${ipaddr} + ":0.0"
+
 $tmppath = $(Resolve-Path tmp).Path
 docker run --rm `
-            -e DISPLAY=${DISPLAY}  `
+            -e DISPLAY=${display}  `
             -v /dev/bus/usb:/dev/bus/usb `
             -v ${tmppath}:/home/openvino/tmp `
             -w /home/openvino/tmp `
-            --device=/dev/video0:/dev/video0 `
-            --device=/dev/dri:/dev/dri `
-            --device-cgroup-rule='c 189:* rmw' `
-            --network=host `
-            --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" `
             ${$debug_docker_cmd} `
             ${dockercmd}
+
+#            --network=host `
+#            --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" `
