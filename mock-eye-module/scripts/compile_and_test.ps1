@@ -62,7 +62,7 @@ If (-NOT (Test-Path "main.cpp" -PathType "Leaf")) {
 }
 
 # Create a $bin variable analagous to $xml
-$bin = [io.path]::GetFileNameWithoutExtension($xml) + ".bin"
+$bin = [io.path]::GetDirectoryName($xml) + "/" + [io.path]::GetFileNameWithoutExtension($xml) + ".bin"
 
 # Map the variables from where they are on the host system to the Docker container
 $labelfile = "/home/openvino/tmp/labels.txt"
@@ -103,8 +103,8 @@ if (Test-Path $bin) {
 }
 
 # Put together the command, based on whether we want webcam or not.
-$appcmd = "./mock_eye_app --device CPU --parser=" + $parser + " --weights=" + $weightfile + " --xml=" + $xmlfile + " --show"
-if (Test-Path $video -PathType "Leaf") {
+$appcmd = "./mock_eye_app --device=CPU --parser=" + $parser + " --weights=" + $weightfile + " --xml=" + $xmlfile + " --show"
+if ($video) {
     $appcmd += " --video_in=" + $videofile
 }
 
@@ -120,26 +120,18 @@ if ($debugmode) {
     $buildtype = "Release"
 }
 
-$dockercmd =  "openvino/ubuntu18_runtime:2021.1 bash -c "
+$dockercmd =  "openvino/ubuntu18_runtime:2021.1 bash -c `""
 $dockercmd += "source /opt/intel/openvino/bin/setupvars.sh && "
 $dockercmd += "mkdir -p build && "
 $dockercmd += "cd build && "
 $dockercmd += "cmake -DCMAKE_BUILD_TYPE=" + ${buildtype} + " .. && "
-$dockercmd += "make && "
-$dockercmd += $appcmd
-Write-Host $dockercmd
+$dockercmd += "make -j4 && "
+$dockercmd += $appcmd + "`""
 
 # Set up the windowing system
-$display = ${ipaddr} + ":0.0"
+$display = ${ipaddr} + ":0"
 
 $tmppath = $(Resolve-Path tmp).Path
-docker run --rm `
-            -e DISPLAY=${display}  `
-            -v /dev/bus/usb:/dev/bus/usb `
-            -v ${tmppath}:/home/openvino/tmp `
-            -w /home/openvino/tmp `
-            ${$debug_docker_cmd} `
-            ${dockercmd}
-
-#            --network=host `
-#            --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" `
+$docker_run_cmd = "docker run --privileged --rm -e DISPLAY=${display} -v ${tmppath}:/home/openvino/tmp -w /home/openvino/tmp ${debug_docker_cmd} $dockercmd"
+Write-Host ${docker_run_cmd}
+Invoke-Expression "& $docker_run_cmd"

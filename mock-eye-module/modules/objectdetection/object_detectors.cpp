@@ -115,14 +115,14 @@ static cv::GStreamingCompiled build_inference_graph_yolo(const std::string &mode
 /**
  * Builds the inference graph, but does not yet run it.
  *
- * @param opt_video_in Path to the input video if we are using an input video file instead of web cam.
+ * @param video_in Path to the input video if we are using an input video file instead of web cam.
  * @param parser The Parser we will be using to interpret the results of the inference graph.
  * @param modelfile Path to the model's IR (topology).
  * @param weightsfile Path to the model's weights.
  * @param device Device we are using.
  * @returns The compiled graph.
  */
-static cv::GStreamingCompiled build_inference_graph(const std::string &opt_video_in, const parser::Parser &parser,
+static cv::GStreamingCompiled build_inference_graph(const std::string &video_in, const parser::Parser &parser,
                                                     const std::string &modelfile, const std::string &weightsfile, const device::Device &device)
 {
     cv::GStreamingCompiled cs;
@@ -140,7 +140,7 @@ static cv::GStreamingCompiled build_inference_graph(const std::string &opt_video
             exit(__LINE__);
     }
 
-    if (opt_video_in.empty())
+    if (video_in.empty())
     {
         // Specify the web cam as the input to the pipeline.
         cs.setSource(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(-1));
@@ -148,8 +148,7 @@ static cv::GStreamingCompiled build_inference_graph(const std::string &opt_video
     else
     {
         // Specify the user-supplied video file as the input to the pipeline.
-        auto gstcmd = "filesrc location=" + opt_video_in + " ! decodebin ! videoconvert ! appsink";
-        cs.setSource(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(gstcmd));
+        cs.setSource(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(video_in));
     }
 
     return cs;
@@ -240,10 +239,10 @@ static void preview(const cv::Mat &bgr, const std::vector<cv::Rect> &boxes, cons
  * Pulls the data from the graph pipeline forever. This is where we run the G-API graph we compiled.
  *
  * @param cs The compiled streaming graph
- * @param opt_show If true, we visualize the display (requires a GUI)
+ * @param show If true, we visualize the display (requires a GUI)
  * @param classes The list of class label names
  */
-void pull_data_from_pipeline(cv::GStreamingCompiled &cs, bool opt_show, const std::vector<std::string> &classes)
+void pull_data_from_pipeline(cv::GStreamingCompiled &cs, bool show, const std::vector<std::string> &classes)
 {
     // Set up all the output nodes. This will be filled in by the cs.pull method.
     cv::Mat out_bgr;
@@ -263,7 +262,7 @@ void pull_data_from_pipeline(cv::GStreamingCompiled &cs, bool opt_show, const st
         preview(out_bgr, out_boxes, out_labels, out_confidences, classes);
 
         // Preview if humans are watching us run this on a GUI
-        if (opt_show)
+        if (show)
         {
             cv::imshow("preview", out_bgr);
             cv::waitKey(1);

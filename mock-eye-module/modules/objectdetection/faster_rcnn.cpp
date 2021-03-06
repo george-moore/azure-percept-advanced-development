@@ -90,8 +90,7 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
     // Select a video source - either the webcam or an input file.
     if (!video_fpath.empty())
     {
-        auto gstcmd = "filesrc location=" + video_fpath + " ! decodebin ! videoconvert ! appsink";
-        pipeline.setSource(cv::gin(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(gstcmd)));
+        pipeline.setSource(cv::gin(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(video_fpath)));
     }
     else
     {
