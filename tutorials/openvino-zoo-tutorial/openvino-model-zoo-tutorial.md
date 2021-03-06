@@ -81,11 +81,64 @@ So let's port this main.cpp file into the Mock Eye Module and make sure it works
 If you look at the mock-eye-module directory, you can see it contains a C++ application that can be compiled and run using
 Docker. Let's build it and run it before making any changes to it, just to make sure it works.
 
+### Prerequisites
+
+Whether you are on Linux/OSX or Windows, you should be able to run the OpenVINO workbench to procure an SSD model, which
+we will use for testing the mock eye module.
+
+```bash
+cd ../../scripts
+./run_workbench.sh # if you are on windows, you can use ./run_workbench.ps1 instead
+```
+
+Follow the link it displays to the console if it does not automatically open a new tab in a browser.
+
+1. Once in the browser, accept the cookies and push "create" in the top left to create a new configuration.
+1. Now click "import" in the middle of the page.
+1. Under the "Open Model Zoo" tab, search for ssd_mobilenet_v2_coco and select it and then "import and download".
+1. FP16 or FP32 are both acceptable (when doing this for the device, you will generally want FP16). Push "Convert".
+1. Once it completes, you may click the download arrow on the far right.
+1. Extract the tar.gz archive to get the two files: `ssd_mobilenet_v2_coco.bin` and `ssd_mobilenet_v2_coco.xml`. These
+   two files comprise what is called the OpenVINO IR (or intermediate representation) format of this model.
+   The XML file contains the topography of the model, and the .bin file contains the weight values.
+1. Put these two files wherever is convenient.
+
+Now go and find an mp4 file from somewhere. I haven't uploaded one to GitHub, but you can find all kinds of movie files
+out there under whatever licenses.
+
 ### Unix
 
-If you are on Linux (I don't have Mac, so I can't test it, but it probably works too), run the following:
+If you are on Linux (I don't have Mac, so I can't test it, but it probably works too),
 
 ```bash
 # Make sure you are in the mock-eye-module directory
-./scripts/compile_and_test.sh
+cd ../../mock-eye-module
+./scripts/compile_and_test.sh --video=<path to the video file> --weights=<path to the .bin> --xml=<path to the .xml>
 ```
+
+### Windows
+
+Unfortunately, there is some additional set up for Windows. See [the appropriate README](../../mock-eye-module/README.md)
+for instructions. You will need to install VcXsrv and then launch it. Because you will be getting your XWindow GUIs
+over an XWindow server, you will need to give the Docker container your IP address.
+
+```powershell
+cd ../../mock-eye-module
+# You don't need the .bin file here because it figures it out from the .xml file, as long as they have
+# the same name and are in the same folder.
+# Why didn't I do this for the bash script too? I don't know.
+./scripts/compile_and_test.ps1 -ipaddr <your IP address> -xml <path-to-the-xml> -video <path-to-the-video>
+```
+
+Whatever OS you are running, the result should be the same. The script should create a tmp folder, copy all the
+source code into it, copy the .mp4 file into it, copy the model files into it, then launch a Docker container
+that compiles and runs the application. You should see a GUI display the video, with bounding boxes overlayed on
+it whenever the SSD network detects something above a certain confidence threshold.
+
+We didn't bother feeding a labels file into this, so the labels are just numbers. It doesn't matter though,
+since the point is just to make sure it works.
+
+If you are curious, you could try the same thing using OpenVINO Model Zoo's `faster_rcnn_resnet50_coco`,
+`yolo-v2-tiny-tf`, or OpenPose. The first two can be downloaded from the workbench, the OpenPose model
+can be [downloaded from here](https://download.01.org/opencv/2021/openvinotoolkit/2021.1/open_model_zoo/models_bin/1/human-pose-estimation-0001/FP32/).
+If you use any of these, you will need to give a --parser argument.
