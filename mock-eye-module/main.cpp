@@ -14,9 +14,9 @@
 #include <vector>
 
 // Local includes
-#include "kernels/ssd.hpp"
+#include "kernels/ssd_kernels.hpp"
 #include "kernels/utils.hpp"
-#include "kernels/yolo.hpp"
+#include "kernels/yolo_kernels.hpp"
 #include "modules/device.hpp"
 #include "modules/objectdetection/faster_rcnn.hpp"
 #include "modules/objectdetection/object_detectors.hpp"

@@ -15,8 +15,8 @@
 #include <opencv2/gapi/streaming/cap.hpp>
 
 // Our includes
-#include "../../kernels/ssd.hpp"
-#include "../../kernels/yolo.hpp"
+#include "../../kernels/ssd_kernels.hpp"
+#include "../../kernels/yolo_kernels.hpp"
 #include "../../kernels/utils.hpp"
 #include "../device.hpp"
 #include "object_detectors.hpp"

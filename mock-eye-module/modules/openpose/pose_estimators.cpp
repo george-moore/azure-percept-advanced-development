@@ -14,7 +14,7 @@
 #include <opencv2/gapi/streaming/cap.hpp>
 
 // Our includes
-#include "../../kernels/openpose.hpp"
+#include "../../kernels/openpose_kernels.hpp"
 #include "../../kernels/utils.hpp"
 #include "../device.hpp"
 #include "human_pose.hpp"

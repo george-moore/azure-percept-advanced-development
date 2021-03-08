@@ -149,4 +149,6 @@ Now that we've got a sandbox to test our model in, let's work on porting the sem
 
 The first thing to do is to use the OpenVINO Workbench again. This time, instead of downloading SSD, search for
 "semantic", and that should be good enough to find "semantic-segmentation-adas-0001". Import it, download it, and extract it
-into its two files.
+into its two files. Put the files somewhere where you won't lose them.
+
+Now let's go through what you will need to do to add support for this model to the mock-eye-app

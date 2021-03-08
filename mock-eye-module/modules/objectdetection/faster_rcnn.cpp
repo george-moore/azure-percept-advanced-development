@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Standard library includes
+#include <iomanip>
 #include <string>
 #include <vector>
 
@@ -19,8 +20,8 @@
 
 // Our includes
 #include "../../kernels/utils.hpp"
-#include "../../kernels/fasterrcnn.hpp"
-#include "../../kernels/ssd.hpp"
+#include "../../kernels/fasterrcnn_kernels.hpp"
+#include "../../kernels/ssd_kernels.hpp"
 #include "../device.hpp"
 #include "../parser.hpp"
 #include "faster_rcnn.hpp"
@@ -65,15 +66,16 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
     // the two networks have compatible output formats in OpenVINO model zoo.
     cv::GArray<cv::Rect> boxes;
     cv::GArray<int> ids;
-    std::tie(boxes, ids) = cv::gapi::custom::parse_ssd(nn, sz);
+    cv::GArray<float> confidences;
+    std::tie(boxes, ids, confidences) = cv::gapi::custom::parse_ssd_with_confidences(nn, sz);
 
     // These are all the output nodes for the graph.
-    auto graph_outs = cv::GOut(boxes, ids, out);
+    auto graph_outs = cv::GOut(boxes, ids, confidences, out);
 
     // Graph compilation ///////////////////////////////////////////////////////
 
     // Set up the actual kernels (the implementations of the parser ops)
-    auto kernels = cv::gapi::kernels<cv::gapi::custom::GOCVParseSSD,
+    auto kernels = cv::gapi::kernels<cv::gapi::custom::GOCVParseSSDWithConf,
                                      cv::gapi::custom::GOCVSize,
                                      cv::gapi::custom::GOCVSizeR,
                                      cv::gapi::custom::OCVBBoxes>();
@@ -103,8 +105,9 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
     // Set up all the output nodes
     std::vector<cv::Rect> out_boxes;
     std::vector<int> out_labels;
+    std::vector<float> out_confidences;
     cv::Mat out_mat;
-    auto pipeline_outputs = cv::gout(out_boxes, out_labels, out_mat);
+    auto pipeline_outputs = cv::gout(out_boxes, out_labels, out_confidences, out_mat);
 
     // Pull the information through the compiled graph, filling each output node at each iteration of the loop.
     while (pipeline.pull(std::move(pipeline_outputs)))
@@ -112,8 +115,9 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
         // Log what we see.
         for (std::size_t i = 0; i < out_boxes.size(); i++)
         {
-            std::cout << "detected " << out_boxes[i]
-                      << ", label "  << out_labels[i]
+            std::cout << "detected: " << out_boxes[i]
+                      << ", label: "  << out_labels[i]
+                      << ", conf: "   << std::fixed << std::setprecision(2) << out_confidences[i]
                       << std::endl;
         }
 

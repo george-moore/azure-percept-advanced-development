@@ -2,18 +2,17 @@
 // Licensed under the MIT license.
 #pragma once
 
-#include <opencv2/gapi/mx.hpp>
+#include <opencv2/gapi.hpp>
 #include <opencv2/gapi/cpu/gcpukernel.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/gapi/core.hpp>
 #include <opencv2/gapi/infer.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/gapi/streaming/desync.hpp>
 
 namespace cv {
 namespace gapi {
-namespace streaming {
+namespace custom {
 
 using GDetectionsWithConf = std::tuple<GArray<Rect>, GArray<int>, GArray<float>>;
 using GYoloAnchors = std::vector<float>;
@@ -122,6 +121,8 @@ GAPI_OCV_KERNEL(GOCVParseYoloWithConf, GParseYoloWithConf)
         std::vector<float> & out_confidences)
     {
         const auto& dims = in_yolo_result.size;
+        // We can accept several shapes in this parser:
+        // If we get a rank 2 tensor, we need to make sure we can reshape it into {1, 13, 13, N*5}.
         GAPI_Assert(dims.dims() == 4);
         GAPI_Assert(dims[0] == 1);
         // Accept {1,1,1,N*13*13*5} or {1,13,13,N*5}
@@ -213,8 +214,8 @@ GAPI_OCV_KERNEL(GOCVParseYoloWithConf, GParseYoloWithConf)
 };
 
 /** C++ wrapper for the YOLO parser */
-GAPI_EXPORTS GDetectionsWithConf parseYoloWithConf(const GMat& in, const GOpaque<Size>& in_sz, float confidence_threshold = 0.5f, float nms_threshold = 0.5f, const GYoloAnchors& anchors = GParseYoloWithConf::defaultAnchors());
+GAPI_EXPORTS GDetectionsWithConf parse_yolo_with_confidences(const GMat& in, const GOpaque<Size>& in_sz, float confidence_threshold = 0.5f, float nms_threshold = 0.5f, const GYoloAnchors& anchors = GParseYoloWithConf::defaultAnchors());
 
-} // namespace streaming
+} // namespace custom
 } // namespace gapi
 } // namespace cv
