@@ -19,6 +19,8 @@
 
   .PARAMETER DebugMode
   If given, we compile the application in Debug mode and drop you into a GDB session.
+  If you want to use Debug mode, you must run `docker build . -t mock-eye-module-debug` from the mock-eye-module folder
+  because the OpenVINO Docker image does not include GDB, so we need a custom Docker container to do it.
 
   .PARAMETER Labels
   The label file for the neural network. Not all models will require this.
@@ -109,18 +111,20 @@ if ($video) {
 }
 
 # Should we debug?
+$dockercmd = ""
 $debug_docker_cmd = ""
 $buildtype = ""
 if ($debugmode) {
+    $dockercmd = "mock-eye-module-debug bash -c `""
     $appcmd = "gdb --args " + $appcmd
     $debug_docker_cmd = "-it"
     $buildtype = "Debug"
 } else {
+    $dockercmd =  "openvino/ubuntu18_runtime:2021.1 bash -c `""
     $debug_docker_cmd = "-t"
     $buildtype = "Release"
 }
 
-$dockercmd =  "openvino/ubuntu18_runtime:2021.1 bash -c `""
 $dockercmd += "source /opt/intel/openvino/bin/setupvars.sh && "
 $dockercmd += "mkdir -p build && "
 $dockercmd += "cd build && "

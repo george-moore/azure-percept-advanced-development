@@ -122,12 +122,13 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
         {
             for (std::size_t i = 0; i < out_boxes.size(); i++)
             {
+                cv::rectangle(out_mat, out_boxes[i], cv::Scalar(0, 255, 0), 2);
                 cv::putText(out_mat,
                             "label " + std::to_string(out_labels[i]),
                             out_boxes[i].tl() + cv::Point(3, 20),
                             cv::FONT_HERSHEY_SIMPLEX,
                             0.7,
-                            cv::Scalar(0,255,0),
+                            cv::Scalar(0, 255, 0),
                             2);
             }
             cv::imshow("Out", out_mat);

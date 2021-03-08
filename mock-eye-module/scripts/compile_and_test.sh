@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 # Compiles and then runs the mock azureeyemodule application inside the docker image.
+# If you want to use Debug mode, you must run `docker build . -t mock-eye-module-debug` from the mock-eye-module folder.
 
 USAGE="$0
          [--debug/-g] (debug using GDB instead of running the program)
@@ -132,9 +133,11 @@ if [ "$DEBUG" == "true" ]; then
     CMD="gdb --args $CMD"
     DEBUG_DOCKER_CMD="-it"
     BUILDTYPE="Debug"
+    DOCKERIMG="mock-eye-module-debug"
 else
     DEBUG_DOCKER_CMD="-t"
     BUILDTYPE="Release"
+    DOCKERIMG="openvino/ubuntu18_runtime:2021.1"
 fi
 
 echo "$CMD"
@@ -154,7 +157,7 @@ docker run --rm \
             --network=host \
             --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
             "$DEBUG_DOCKER_CMD" \
-            openvino/ubuntu18_runtime:2021.1 bash -c \
+            "$DOCKERIMG" bash -c \
                 "source /opt/intel/openvino/bin/setupvars.sh && \
                 mkdir -p build && \
                 cd build && \

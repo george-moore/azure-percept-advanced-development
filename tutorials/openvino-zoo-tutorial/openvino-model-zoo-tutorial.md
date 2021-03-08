@@ -138,7 +138,15 @@ it whenever the SSD network detects something above a certain confidence thresho
 We didn't bother feeding a labels file into this, so the labels are just numbers. It doesn't matter though,
 since the point is just to make sure it works.
 
-If you are curious, you could try the same thing using OpenVINO Model Zoo's `faster_rcnn_resnet50_coco`,
-`yolo-v2-tiny-tf`, or OpenPose. The first two can be downloaded from the workbench, the OpenPose model
+If you are curious, you could try the same thing using OpenVINO Model Zoo's `faster_rcnn_resnet50_coco` (parser argument "faster-rcnn"),
+`yolo-v2-tiny-tf` (parser argument "yolo"), or OpenPose (parser argument "openpose"). The first two can be downloaded from the workbench, the OpenPose model
 can be [downloaded from here](https://download.01.org/opencv/2021/openvinotoolkit/2021.1/open_model_zoo/models_bin/1/human-pose-estimation-0001/FP32/).
 If you use any of these, you will need to give a --parser argument.
+
+## Semantic Segmentation
+
+Now that we've got a sandbox to test our model in, let's work on porting the semantic segmentation model over to it.
+
+The first thing to do is to use the OpenVINO Workbench again. This time, instead of downloading SSD, search for
+"semantic", and that should be good enough to find "semantic-segmentation-adas-0001". Import it, download it, and extract it
+into its two files.
