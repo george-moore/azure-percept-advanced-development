@@ -120,14 +120,28 @@ GAPI_OCV_KERNEL(GOCVParseYoloWithConf, GParseYoloWithConf)
         std::vector<int> & out_labels,
         std::vector<float> & out_confidences)
     {
-        const auto& dims = in_yolo_result.size;
+        auto dims = in_yolo_result.size;
         // We can accept several shapes in this parser:
         // If we get a rank 2 tensor, we need to make sure we can reshape it into {1, 13, 13, N*5}.
+        cv::Mat yolo_result;
+        if (dims.dims() == 2)
+        {
+            // Try to reshape
+            GAPI_Assert(dims[0] == 1);
+            GAPI_Assert((dims[1] / (13 * 13)) % 5 == 0);
+            yolo_result = in_yolo_result.reshape(1, std::vector<int>{1, 13, 13, (dims[1] / (13 * 13))});
+            dims = yolo_result.size;
+        }
+        else
+        {
+            yolo_result = in_yolo_result;
+        }
+
         GAPI_Assert(dims.dims() == 4);
         GAPI_Assert(dims[0] == 1);
         // Accept {1,1,1,N*13*13*5} or {1,13,13,N*5}
         GAPI_Assert(((dims[1] == 1) && (dims[2] == 1) && (dims[3] % (5 * 13 * 13) == 0)) ||
-            ((dims[1] == 13) && (dims[2] == 13) && (dims[3] % 5 == 0)));
+                    ((dims[1] == 13) && (dims[2] == 13) && (dims[3] % 5 == 0)));
         const auto num_classes = dims[3] * dims[2] * dims[1] / (5 * 13 * 13) - 5;
         GAPI_Assert(num_classes > 0);
         GAPI_Assert(0 < nms_threshold && nms_threshold <= 1);
@@ -139,7 +153,7 @@ GAPI_OCV_KERNEL(GOCVParseYoloWithConf, GParseYoloWithConf)
         YoloParams params;
         constexpr auto side = 13;
         constexpr auto side_square = side * side;
-        const auto output = in_yolo_result.ptr<float>();
+        const auto output = yolo_result.ptr<float>();
 
         YoloParser parser(output, side, params.coords, num_classes);
 
