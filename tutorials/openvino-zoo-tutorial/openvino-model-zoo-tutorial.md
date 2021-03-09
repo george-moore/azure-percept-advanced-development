@@ -699,7 +699,31 @@ GAPI_OCV_KERNEL(GOCVParseUnetForSemSeg, GParseUnetForSemSeg)
         // Since this is a super simple semantic segmentation network, all the network does
         // is output a color mask. Since we will want to display this color mask overlayed on top of
         // the input image, let's resize the color mask here to the right size.
-        resize(in_img, out_img, in_sz);
+        //
+        // First, remember that we aren't getting an image per se, instead, we are getting a tensor.
+        // {Batch size (which will be 1), 1, 1024 pixels high, 2048 pixels wide}
+        //
+        // So, we need to reshape into {1024, 2048, 1} first, and then resize into whatever size we have.
+        CV_Assert(in_img.size.dims() == 4);
+        auto reshaped_img = in_img.reshape(1, {in_img.size[2], in_img.size[3]});
+        resize(reshaped_img, out_img, in_sz);
+
+        // Now go through all the pixel values in the input image and add them to the output classes.
+        // There may be some super fast way to do this. But who cares? Let's just do a simple brute-force
+        // naive algorithm: run over each pixel in the image and add it to a set. Then convert the set to
+        // a vector.
+        std::unordered_set<int> classes;
+        auto it = in_img.begin<uchar>();
+        auto end = in_img.end<uchar>();
+        for (; it != end; ++it)
+        {
+            classes.insert(*it);
+        }
+
+        for (auto id : classes)
+        {
+            out_classes.push_back(id);
+        }
     }
 };
 
@@ -800,4 +824,165 @@ Unfortunately, the official OpenVINO Docker images do not contain GDB, so we hav
 Before I forget, remove the tmp folder that the script created. Do that after running the script each time, or add it to the script itself.
 I have left the tmp folder in case for some reason I want to get at or inspect the artifacts that end up in it.
 
-Now, let's make the new Docker image. It is very simple, just cd into the mock-eye-module directory
+Now, let's make the new Docker image. It is very simple, just cd into the mock-eye-module directory and run
+
+```bash
+docker build . -t mock-eye-module-debug
+```
+
+It will take a few minutes to build the new Dockerfile, and when you are done, you can run `docker image list`
+and see that you have made a `mock-eye-module-debug` image. It is important that you name it this, because the
+compile_and_run scripts expect this name.
+
+Now that we've built that Docker image, we can use GDB:
+
+```ps1
+# On Windows
+./scripts/compile_and_test.ps1 -ipaddr <your-ip-address> -xml <path to the XML file> -parser unet-seg -video <path to the video> -labels <path to labels.txt> -debugmode
+```
+
+or
+
+```bash
+# On Linux
+./scripts/compile_and_test.sh --video=<path to the video file> --weights=<path to the .bin> --xml=<path to the .xml> --labels=<path to labels.txt> --debug
+```
+
+This should build the application in the new Docker container and drop you into GDB with the right arguments.
+
+Let's just run the program to the point where it crashes and then examine the backtrace:
+
+```
+(gdb) run
+```
+
+This command will run the program and you will see all the same stuff as before (this time augmented by a bunch of GDB messages as well).
+Now you should see something like this:
+
+```
+[New Thread 0x7fffcdffb700 (LWP 310)]
+[ WARN:0] global ../opencv/modules/videoio/src/cap_gstreamer.cpp (898) open OpenCV | GStreamer warning: unable to query duration of stream
+[ WARN:0] global ../opencv/modules/videoio/src/cap_gstreamer.cpp (935) open OpenCV | GStreamer warning: Cannot query video position: status=1, value=0, duration=-1
+terminate called after throwing an instance of 'cv::Exception'
+  what():  OpenCV(4.5.0-openvino) ../opencv/modules/gapi/src/backends/ie/giebackend.cpp:101: error: (-215:Assertion failed) false && "Unsupported data type" in function 'toCV'
+
+
+Thread 1 "mock_eye_app" received signal SIGABRT, Aborted.
+__GI_raise (sig=sig@entry=6) at ../sysdeps/unix/sysv/linux/raise.c:51
+51      ../sysdeps/unix/sysv/linux/raise.c: No such file or directory.
+(gdb)
+```
+
+Don't worry about the "../sysdeps/unix/sysv/linux/raise.c: No such file or directory" - it just
+means that we are running GDB on a lightweight Docker container that doesn't have all the
+debugging goodies installed and configured.
+
+Hitting `bt` followed by `ENTER` will get you something like this:
+
+```
+(gdb) bt
+#0  0x00007ffff334ffb7 in __GI_raise (sig=sig@entry=6) at ../sysdeps/unix/sysv/linux/raise.c:51
+#1  0x00007ffff3351921 in __GI_abort () at abort.c:79
+#2  0x00007ffff3d44957 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#3  0x00007ffff3d4aae6 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ffff3d4ab21 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#5  0x00007ffff3d4ad54 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff42a01c6 in cv::error(cv::Exception const&) () at /opt/intel/openvino/opencv/lib/libopencv_core.so.4.5
+#7  0x00007ffff42a1232 in cv::error(int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, int) ()
+    at /opt/intel/openvino/opencv/lib/libopencv_core.so.4.5
+#8  0x00007ffff7b2ad34 in cv::gimpl::ie::Infer::outMeta(ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+#9  0x00007ffff7b1fd6c in std::_Function_handler<std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > (ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&), std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > (*)(ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> >
+> const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&)>::_M_invoke(std::_Any_data const&, ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > >
+const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+#10 0x00007ffff7a290b2 in cv::gimpl::passes::inferMeta(ade::passes::PassContext&, bool) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+---Type <return> to continue, or q <return> to quit---
+#11 0x00007ffff7a0b3c9 in cv::gimpl::GCompiler::runMetaPasses(ade::Graph&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+#12 0x00007ffff7a5de68 in cv::gimpl::GStreamingExecutor::setSource(std::vector<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef>, std::allocator<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef> > >&&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+#13 0x00007ffff7a15683 in cv::GStreamingCompiled::Priv::setSource(std::vector<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef>, std::allocator<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef> > >&&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+#14 0x000055555564bd4b in semseg::compile_and_run(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>,
+std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, device::Device const&, bool, std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) (video_fpath="/home/openvino/tmp/movie.mp4", modelfpath="/home/openvino/tmp/model.xml", weightsfpath="/home/openvino/tmp/model.bin", device=@0x7fffffffe030: device::Device::CPU, show=true, labels=std::vector of length 0, capacity 0)
+    at /home/openvino/tmp/modules/segmentation/unet_semseg.cpp:142
+#15 0x00005555555fb284 in main(int, char**) (argc=7, argv=0x7fffffffe268) at /home/openvino/tmp/main.cpp:132
+```
+
+This is pretty hard to read, so I've spaced each function call out for you and relisted below:
+
+```
+(gdb) bt
+#0  0x00007ffff334ffb7 in __GI_raise (sig=sig@entry=6) at ../sysdeps/unix/sysv/linux/raise.c:51
+
+#1  0x00007ffff3351921 in __GI_abort () at abort.c:79
+
+#2  0x00007ffff3d44957 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+
+#3  0x00007ffff3d4aae6 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+
+#4  0x00007ffff3d4ab21 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+
+#5  0x00007ffff3d4ad54 in  () at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+
+#6  0x00007ffff42a01c6 in cv::error(cv::Exception const&) () at /opt/intel/openvino/opencv/lib/libopencv_core.so.4.5
+
+#7  0x00007ffff42a1232 in cv::error(int, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, char const*, char const*, int) ()
+    at /opt/intel/openvino/opencv/lib/libopencv_core.so.4.5
+
+#8  0x00007ffff7b2ad34 in cv::gimpl::ie::Infer::outMeta(ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#9  0x00007ffff7b1fd6c in std::_Function_handler<std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > (ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&), std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > (*)(ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> >
+> const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&)>::_M_invoke(std::_Any_data const&, ade::Graph const&, ade::Handle<ade::Node> const&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > >
+const&, std::vector<cv::GArg, std::allocator<cv::GArg> > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#10 0x00007ffff7a290b2 in cv::gimpl::passes::inferMeta(ade::passes::PassContext&, bool) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#11 0x00007ffff7a0b3c9 in cv::gimpl::GCompiler::runMetaPasses(ade::Graph&, std::vector<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc>, std::allocator<cv::util::variant<cv::util::monostate, cv::GMatDesc, cv::GScalarDesc, cv::GArrayDesc, cv::GOpaqueDesc> > > const&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#12 0x00007ffff7a5de68 in cv::gimpl::GStreamingExecutor::setSource(std::vector<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef>, std::allocator<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef> > >&&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#13 0x00007ffff7a15683 in cv::GStreamingCompiled::Priv::setSource(std::vector<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef>, std::allocator<cv::util::variant<cv::UMat, std::shared_ptr<cv::gapi::wip::IStreamSource>, cv::Mat, cv::Scalar_<double>, cv::detail::VectorRef, cv::detail::OpaqueRef> > >&&) () at /opt/intel/openvino/opencv/lib/libopencv_gapi.so.4.5
+
+#14 0x000055555564bd4b in semseg::compile_and_run(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>,
+std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, device::Device const&, bool, std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) (video_fpath="/home/openvino/tmp/movie.mp4", modelfpath="/home/openvino/tmp/model.xml", weightsfpath="/home/openvino/tmp/model.bin", device=@0x7fffffffe030: device::Device::CPU, show=true, labels=std::vector of length 0, capacity 0)
+    at /home/openvino/tmp/modules/segmentation/unet_semseg.cpp:142
+
+#15 0x00005555555fb284 in main(int, char**) (argc=7, argv=0x7fffffffe268) at /home/openvino/tmp/main.cpp:132
+```
+
+Reading this from bottom to top, we get something like the following call chain:
+
+```
+main -> semseg::compile_and_run -> setSource -> setSource -> runMetaPasses -> inferMeta -> anonymous-function-handler -> outMeta -> error tracing stuff
+```
+
+So it looks like we call `main()`, which calls `compile_and_run()`, which then calls `setSource()`. All of that is in our code,
+and is easy to follow. Calling `setSource()` however, invokes the G-API's just-in-time compiler, which then attempts to compile our graph.
+It looks like that's where things go arry. First, it goes through an internal `setSource()` function, then off to `runMetaPasses()`,
+then `inferMeta()`, followed by some anonymous function, and finally into some internal `outMeta()`, where it complains about some type not being allowed.
+
+Looking at the source code for this file reveals that the function we are dying in is trying a switch statement between
+two values: `CV_8U` and `CV_32F`, which looks like 8-bit unsigned vs 32-bit floating point. We haven't specified any types
+like that.
+
+Let's double check all of the types that are flowing through the G-API graph.
+
+I made this pretty picture to show what's going on with the G-API graph right now:
+
+![G-API SemSeg Graph](imgs/g-api-graph.png "G-API Semantic Segmentation Graph")
+
+You can see that it isn't super complicated. The input image is fed into three different nodes, `infer()`, `size()`, and `copy()`.
+
+I have double checked the image type from the video file, it is `CV_8U3`, which makes sense,
+since it is an 8-bit 3-channel input image. That should be fine.
+
+The result of `copy()` should be an identical copy, so I don't think that's the problem.
+
+The result of `size()` is a `cv::Size` object, so that's probably not it either. Also, I have used `copy()`
+and `size()` in several other graphs, and never had this problem, so I don't think those are the culprits.
+
+So I think we can narrow this down to a handful of possibilities:
+
+1. `infer()` has a problem with the input image.
+1. `infer()` is outputting a type that is incorrect.
+1. `parse_unet_for_semseg()` has a problem with `nn` or with `sz`.
+1. `parse_unet_for_semseg()` is outputting something with an incorrect type.
+
+Let's try removing both of these problematic ops from the graph and see if everything works:

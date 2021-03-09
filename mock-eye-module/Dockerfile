@@ -18,7 +18,7 @@ USER root
 SHELL ["/bin/bash", "-xo", "pipefail", "-c"]
 
 # Install stuff we need
-RUN apt-get update && apt-get install -y gdb && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y gdb libc6-dbg && rm -rf /var/lib/apt/lists/*
 
 # Use the OpenVINO user from the base image
 USER openvino
