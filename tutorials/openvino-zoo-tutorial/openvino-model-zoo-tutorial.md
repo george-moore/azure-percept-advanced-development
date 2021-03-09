@@ -153,14 +153,14 @@ The first thing to do is to use the OpenVINO Workbench again. This time, instead
 "semantic", and that should be good enough to find "semantic-segmentation-adas-0001". Import it, download it, and extract it
 into its two files. Put the files somewhere where you won't lose them.
 
-Now let's go through what you will need to do to add support for this model to the mock-eye-app. Remember the point of adding
-support for this model to the mock-eye-app is that doing so will put us about halfway towards our real goal of porting
+Now let's go through what you will need to do to add support for this model to the mock-eye-module. Remember the point of adding
+support for this model to the mock-eye-module is that doing so will put us about halfway towards our real goal of porting
 this model to the Percept application instead. This sandbox application will allow us to run GDB and to feed a movie file
 as an input to the application, while also being a much smaller application that is easier to reason about.
 
-Here are the steps that are needed to add support to the mock-eye-app:
+Here are the steps that are needed to add support to the mock-eye-module:
 
-1. Add a new "parser" variant to the enum in mock-eye-app/modules/parser.[c/h]pp,
+1. Add a new "parser" variant to the enum in mock-eye-module/modules/parser.[c/h]pp,
    and don't forget to update the `look_up_parser()` function there so the command line can accept your parser as an argument.
 1. Add a folder under `modules` called `segmentation`, and then update the CMakeLists.txt file to include the new folder.
 1. Put all of our runtime logic in the `modules/segmentation` folder, which will include compiling a G-API graph,
@@ -237,6 +237,9 @@ Parser look_up_parser(const std::string &parser_str)
 Now update main.cpp:
 
 ```C++
+// Make sure to include this
+#include "modules/segmentation/unet_semseg.hpp"
+
 // .... other code
 
 /** Arguments for this program (short-arg long-arg | default-value | help message) */
@@ -354,6 +357,7 @@ Let's add the .cpp file now.
 
 // Standard library includes
 #include <iomanip>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -370,7 +374,7 @@ Let's add the .cpp file now.
 #include "../../kernels/unet_semseg_kernels.hpp"
 #include "../device.hpp"
 #include "../parser.hpp"
-#include "faster_rcnn.hpp"
+#include "unet_semseg.hpp"
 
 namespace semseg {
 
@@ -383,6 +387,36 @@ namespace semseg {
 //
 // In case you are wondering, it is <output(input)>
 G_API_NET(SemanticSegmentationUNet, <cv::GMat(cv::GMat)>, "com.microsoft.u-net-semseg-network");
+
+// I know I wanted to only have one function in this file, but it is really helpful to just have
+// this single other function for visualization purposes. Don't worry about it, it's taken
+// pretty much directly from the semantic segmentation demo I pointed you to on GitHub earlier
+// and just overlays colors on top of an input image and returns it as an output image.
+cv::Mat apply_color_map(const cv::Mat &input)
+{
+    // We creat a static colors "array". It is really a shape {256, 1, 3} tensor.
+    static cv::Mat colors;
+
+    // Create a random number generator to create our colors randomly. Use the same seed each time.
+    static std::mt19937 rng;
+    rng.seed(12345);
+    static std::uniform_int_distribution<int> distr(0, 255);
+
+    // If this is the first time we call this function, we will fill in the colors array
+    if (colors.empty())
+    {
+        colors = cv::Mat(256, 1, CV_8UC3);
+        for (size_t i = 0; i < (std::size_t)colors.cols; i++)
+        {
+            colors.at<cv::Vec3b>(i, 0) = cv::Vec3b(distr(rng), distr(rng), distr(rng));
+        }
+    }
+
+    // Converting class to color
+    cv::Mat out;
+    cv::applyColorMap(input, out, colors);
+    return out;
+}
 
 // This is the only function we expose in the header file, so it is technically the only function we **need**.
 // We will only use a single function and put all of our stuff inside it for the sake of the tutorial,
@@ -425,8 +459,12 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
     cv::GMat colored_output;
     std::tie(colored_output, ids) = cv::gapi::custom::parse_unet_for_semseg(nn, sz);
 
+    // Since we want to be able to overlay the semantic segmentation mask on top of
+    // the original image, we will also need to feed the original image out of the graph.
+    auto raw_input = cv::gapi::copy(in);
+
     // These are all the output nodes for the graph.
-    auto graph_outs = cv::GOut(colored_output, ids);
+    auto graph_outs = cv::GOut(colored_output, ids, raw_input);
 
     // Graph compilation ///////////////////////////////////////////////////////
 
@@ -470,17 +508,19 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
     // in the GOut call above. And the order of these data containers needs to match the order
     // that we specified in the GOut call above.
     //
-    // Also, while we only have output from the neural network here, and therefore it doesn't make sense to
-    // make it asynchronous, it is possible to make the G-API graph asynchronous so that each
+    // Also, it is possible to make the G-API graph asynchronous so that each
     // item is delivered as quickly as it can. In fact, we do this in the Azure Percept azureeyemodule's application
     // so that we can output the raw RTSP stream at however fast it comes in, regardless of how fast the neural
     // network is running.
     //
     // In synchronous mode (the default), no item is output until all the output nodes have
     // something to output.
-    cv::Mat out_mat;
+    //
+    // We'll just use synchronous mode here.
+    cv::Mat out_color_mask;
     std::vector<int> out_ids;
-    auto pipeline_outputs = cv::gout(out_mat, out_ids);
+    cv::Mat out_raw_mat;
+    auto pipeline_outputs = cv::gout(out_color_mask, out_ids, out_raw_mat);
 
     // Pull the information through the compiled graph, filling our output nodes at each iteration.
     while (pipeline.pull(std::move(pipeline_outputs)))
@@ -490,14 +530,14 @@ void compile_and_run(const std::string &video_fpath, const std::string &modelfpa
         // but for this example, this will suffice.
         for (const auto &id : out_ids)
         {
-            const auto label = ((id > 0) && (id < labels.size())) ? labels.at(id) : "Unknown";
+            const auto label = ((id > 0) && ((size_t)id < labels.size())) ? labels.at(id) : "Unknown";
             std::cout << "detected: " << id << ", label: " << label << std::endl;
         }
 
         // Display the semantic segmentation color mark-ups.
         if (show)
         {
-            cv::imshow("Out", out_mat);
+            cv::imshow("Out", (out_raw_mat / 2) + (out_color_mask / 2)); // Taken from the segmentation demo
             cv::waitKey(1);
         }
     }
@@ -527,7 +567,7 @@ Which means we really have three things we need to write:
 Let's knock out the op first, since it is required for the other two.
 
 ```C++
-// Put this in mock-eye-app/kernels/unet_semseg_kernels.hpp
+// Put this in mock-eye-module/kernels/unet_semseg_kernels.hpp
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 #pragma once
@@ -537,6 +577,7 @@ Let's knock out the op first, since it is required for the other two.
 #include <vector>
 
 // Third party includes
+#include <opencv2/opencv.hpp>
 #include <opencv2/gapi.hpp>
 #include <opencv2/gapi/cpu/gcpukernel.hpp>
 
@@ -594,7 +635,7 @@ G_API_OP(GParseUnetForSemSeg, <GSegmentationAndClasses(GMat, GOpaque<Size>)>, "o
 We'll need a little more boilerplate. Let's create a C++ function that wraps our op.
 
 ```C++
-// Put this in mock-eye-app/kernels/unet_semseg_kernels.cpp
+// Put this in mock-eye-module/kernels/unet_semseg_kernels.cpp
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 #include "unet_semseg_kernels.hpp"
@@ -621,7 +662,7 @@ GSegmentationAndClasses parse_unet_for_semseg(const GMat &in, const GOpaque<Size
 With that boilerplate taken care of, let's create an actual implementation of the op: the kernel.
 
 ```C++
-// Put this at the bottom of mock-eye-app/kernels/unet_semseg_kernels.cpp
+// Put this at the bottom of mock-eye-module/kernels/unet_semseg_kernels.cpp
 
 // This is the kernel declaration for the op.
 // A single op can have several kernel implementations. That's kind of the whole point.
@@ -654,7 +695,11 @@ GAPI_OCV_KERNEL(GOCVParseUnetForSemSeg, GParseUnetForSemSeg)
     // <void(const Mat&, const Size&, Mat&, std::vector<int>&)>
     static void run(const Mat &in_img, const Size &in_sz, Mat &out_img, std::vector<int> &out_classes)
     {
-        // TODO: Here's where we will implement all the logic for post-processing our neural network
+        // Here's where we will implement all the logic for post-processing our neural network
+        // Since this is a super simple semantic segmentation network, all the network does
+        // is output a color mask. Since we will want to display this color mask overlayed on top of
+        // the input image, let's resize the color mask here to the right size.
+        resize(in_img, out_img, in_sz);
     }
 };
 
@@ -672,10 +717,7 @@ have so far done.
 
 The only custom pieces of code are the G-API graph itself and any kernel implementations.
 In this example, that means the G-API code found in `compile_and_run` in `unet_semseg.cpp`
-and the kernel we are about to write in `unet_semseg_kernels.hpp`.
-
-Now that we've got all that done, it is time to port the example code we found at the beginning of the tutorial
-to the kernel. Again, [here's the example code](https://github.com/openvinotoolkit/open_model_zoo/blob/master/demos/segmentation_demo_async/main.cpp).
+and the kernel in `unet_semseg_kernels.hpp`.
 
 ## Label file
 
@@ -706,3 +748,56 @@ motorcycle
 bicycle
 ego-vehicle
 ```
+
+What's an "ego-vehicle"? I didn't know. I'm still not sure I know, but I looked it up and it seems to be
+a driverless car or something... Whatever.
+
+## Compilation and Debugging
+
+Now let's try to compile it. Because I am so nice, I made sure that the compiler errors were all fixed before
+posting this tutorial. But for pedagogical purposes, I've left logical errors; let's walk through the debug cycles together.
+
+First, let's compile and run. You will need the semantic-segmentation-adas-0001 model in IR format. I already told you to
+download it and put it somewhere. You can get it from the OpenVINO Workbench, in case you didn't already do that.
+You will also need a movie file (or if you are running on Linux, you can use the webcam on your computer instead).
+Since this model was trained on traffic scenes, I recommend using a video that has cars and whatnot in it.
+Intel has a GitHub that hosts some small video files for their demos, so you could [check that out](https://github.com/intel-iot-devkit/sample-videos),
+in particular, car-detection.mp4 and person-bicycle-car-detection.mp4 are both fine. Or use your own.
+
+I'll use person-bicycle-car-detection.mp4 for this tutorial, but I'll try to make sure it works for car-detection.mp4 as well.
+
+Once you have both of those things, you can try compiling and running the mock-eye-module with:
+
+```ps1
+# On Windows
+./scripts/compile_and_test.ps1 -ipaddr <your-ip-address> -xml <path to the XML file> -parser unet-seg -video <path to the video> -labels <path to labels.txt>
+```
+
+or
+
+```bash
+# On Linux
+./scripts/compile_and_test.sh --video=<path to the video file> --weights=<path to the .bin> --xml=<path to the .xml> --labels=<path to labels.txt>
+```
+
+It should compile and run the program inside a Docker container.
+
+First it should spout a whole bunch of GStreamer warnings, since we are running in a Docker container,
+we haven't installed most of the GStreamer libraries, so OpenCV is complaining that GStreamer is missing
+plugins. But we don't care.
+
+Then it should die with a `cv::Exception` and an error message something along the lines of
+
+```
+what():  OpenCV(4.5.0-openvino) ../opencv/modules/gapi/src/backends/ie/giebackend.cpp:101: error: (-215:Assertion failed) false && "Unsupported data type" in function 'toCV'
+```
+
+Great. So... somewhere in the Inference Engine back end of the G-API library, it is hitting an assert and dying. At least it was nice enough to tell
+us that specifically, it died because it has an "Unsupported data type" that it is probably trying to convert or something. Hmm.
+
+Unfortunately, the official OpenVINO Docker images do not contain GDB, so we have to make our own Docker image for debugging.
+
+Before I forget, remove the tmp folder that the script created. Do that after running the script each time, or add it to the script itself.
+I have left the tmp folder in case for some reason I want to get at or inspect the artifacts that end up in it.
+
+Now, let's make the new Docker image. It is very simple, just cd into the mock-eye-module directory
