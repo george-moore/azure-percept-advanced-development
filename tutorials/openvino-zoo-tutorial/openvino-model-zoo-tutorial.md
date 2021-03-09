@@ -591,11 +591,91 @@ G_API_OP(GParseUnetForSemSeg, <GSegmentationAndClasses(GMat, GOpaque<Size>)>, "o
 // We'll put more code down here before we close out the namespace
 ```
 
+We'll need a little more boilerplate. Let's create a C++ function that wraps our op.
+
+```C++
+// Put this in mock-eye-app/kernels/unet_semseg_kernels.cpp
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+#include "unet_semseg_kernels.hpp"
+
+namespace cv {
+namespace gapi {
+namespace custom {
+
+// This is pretty much pure boilerplate and is not strictly necessary.
+// We just wrap the invocation of our op with a traditional C++ function
+// so that we can just call parse_unet_for_semseg() rather than use
+// the stranger looking GParseUnetForSemSeg::on() syntax.
+// Really, that's all.
+GSegmentationAndClasses parse_unet_for_semseg(const GMat &in, const GOpaque<Size> &in_sz)
+{
+    return GParseUnetForSemSeg::on(in, in_sz);
+}
+
+} // namespace custom
+} // namespace gapi
+} // namespace cv
+```
+
 With that boilerplate taken care of, let's create an actual implementation of the op: the kernel.
 
 ```C++
-// Same file as above, just put this below the op code.
+// Put this at the bottom of mock-eye-app/kernels/unet_semseg_kernels.cpp
+
+// This is the kernel declaration for the op.
+// A single op can have several kernel implementations. That's kind of the whole point.
+// The idea behind G-API is twofold: one is to make a declarative style computer vision
+// pipeline syntax, and the other is to separate the declaration of the computer vision pipeline
+// from its implementation. The reason for this is because you may want to have the same code
+// that runs on a VPU, GPU, or CPU. If you are using G-API for it, all you would need to do
+// is implement a GOCVParseUnetForSemSegCPU, GOCVParseUnetForSemSegGPU, and a GOCVParseUnetForSemSegVPU
+// function. All the other code would remain the same.
+//
+// In our case, we are going to do everything in this function the CPU, since there's not really
+// any acceleration needed for this, and because our VPU on the device is occupied running
+// the neural network and doing a few other things.
+//
+// So we will just create a single kernel, and it will run on the CPU.
+GAPI_OCV_KERNEL(GOCVParseUnetForSemSeg, GParseUnetForSemSeg)
+{
+    // We need a static void run function.
+    // It needs to take in the inputs as references and output the return values as references.
+    //
+    // So, since our op is of type <GSegmentationAndClasses(GMat, GOpaque<Size>)>
+    // which decays to <std::tuple<GMat, GArray<int>>(GMat, GOpaque<Size>)>
+    // and since the kernel function needs to run good old fashioned C++ code (not G-API code),
+    // we need to map this type to:
+    //
+    // <std::tuple<cv::Mat, std::vector<int>>(cv::Mat, cv::Size)>
+    //
+    // but because we need to map our return value to a list of output references,
+    // the actual signature of this function is:
+    // <void(const Mat&, const Size&, Mat&, std::vector<int>&)>
+    static void run(const Mat &in_img, const Size &in_sz, Mat &out_img, std::vector<int> &out_classes)
+    {
+        // TODO: Here's where we will implement all the logic for post-processing our neural network
+    }
+};
+
+// Don't forget to declare the C++ wrapper function in our header!
+GAPI_EXPORTS GSegmentationAndClasses parse_unet_for_semseg(const GMat &in, const GOpaque<Size> &in_sz);
+
+} // namespace custom
+} // namespace gapi
+} // namespace cv
 ```
+
+Phew! That was a lot. It is important to recognize something: almost all of what we've done so far is just boilerplate.
+Every model that you port will follow this exact same series of steps, and will look remarkably similar to what we
+have so far done.
+
+The only custom pieces of code are the G-API graph itself and any kernel implementations.
+In this example, that means the G-API code found in `compile_and_run` in `unet_semseg.cpp`
+and the kernel we are about to write in `unet_semseg_kernels.hpp`.
+
+Now that we've got all that done, it is time to port the example code we found at the beginning of the tutorial
+to the kernel. Again, [here's the example code](https://github.com/openvinotoolkit/open_model_zoo/blob/master/demos/segmentation_demo_async/main.cpp).
 
 ## Label file
 
