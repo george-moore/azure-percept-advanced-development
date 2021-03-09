@@ -347,7 +347,254 @@ to be more verbose:
 Let's add the .cpp file now.
 
 ```C++
+// Put this in a file called mock-eye-module/modules/segmentation/unet_semseg.cpp
+//
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
 
+// Standard library includes
+#include <iomanip>
+#include <string>
+#include <vector>
+
+// Third party includes
+#include <opencv2/core/utility.hpp>
+#include <opencv2/gapi/core.hpp>
+#include <opencv2/gapi/infer.hpp>
+#include <opencv2/gapi/infer/ie.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/gapi/streaming/cap.hpp>
+
+// Our includes
+#include "../../kernels/utils.hpp"
+#include "../../kernels/unet_semseg_kernels.hpp"
+#include "../device.hpp"
+#include "../parser.hpp"
+#include "faster_rcnn.hpp"
+
+namespace semseg {
+
+// This macro is used to tell G-API what types this network is going to take in and output.
+// In our case, we are going to take in a single image (represented as a CV Mat, in G-API called a GMat)
+// and output a tensor of shape {Batch size (which will be 1), 1, 1024 pixels high, 2048 pixels wide},
+// which we will again represent as a GMat.
+//
+// The tag at the end can be anything you want.
+//
+// In case you are wondering, it is <output(input)>
+G_API_NET(SemanticSegmentationUNet, <cv::GMat(cv::GMat)>, "com.microsoft.u-net-semseg-network");
+
+// This is the only function we expose in the header file, so it is technically the only function we **need**.
+// We will only use a single function and put all of our stuff inside it for the sake of the tutorial,
+// but if you were doing this for real, you would probably want to break stuff out into separate functions.
+void compile_and_run(const std::string &video_fpath, const std::string &modelfpath, const std::string &weightsfpath, const device::Device &device, bool show, const std::vector<std::string> &labels)
+{
+    // Create the network itself. Here we are using the cv::gapi::ie namespace, which stands for Inference Engine.
+    // On the device, we have a custom back end, namespaced as cv::gapi::mx instead.
+    auto network = cv::gapi::ie::Params<SemanticSegmentationUNet>{ modelfpath, weightsfpath, device::device_to_string(device) };
+
+    // Graph construction //////////////////////////////////////////////////////
+
+    // Construct the input node. We will fill this in with OpenCV Mat objects as we get them from the video source.
+    cv::GMat in;
+
+    // Apply the network to the frame to produce a single output image, as specified by the parameters we used
+    // in the G_API_NET macro.
+    auto nn = cv::gapi::infer<SemanticSegmentationUNet>(in);
+
+    // Get the size of the input image. We'll need this for later.
+    auto sz = cv::gapi::custom::size(in);
+
+    // Here we call our own custom G-API op on the neural network inferences and the size of the input image
+    // to interpret the output of the neural network. G-API will resize the input image for us, and it will
+    // run the network for us on whichever device we passed into the Params constructor,
+    // but it obviously doesn't know what to do with the output.
+    //
+    // So we will write up some custom code to interpret the output and we will incorporate
+    // that output into the graph here.
+    //
+    // As this is a semantic segmentation network, we'd like this graph op to take in the output of our
+    // neural network (which should be an image of size {1024 rows, 2048 cols}, where each pixel
+    // is a 2D coordinate with a value that corresponds to the class it belongs to)
+    // and then color it based on the pixel values. Lastly, we'll resize it back down to the same size as the
+    // input image. We'll also output the IDs of the objects we see, so that we can report them to the
+    // console later.
+    //
+    // We'll talk in detail about this later, but obviously, we'll need to write this function ourselves.
+    cv::GArray<int> ids;
+    cv::GMat colored_output;
+    std::tie(colored_output, ids) = cv::gapi::custom::parse_unet_for_semseg(nn, sz);
+
+    // These are all the output nodes for the graph.
+    auto graph_outs = cv::GOut(colored_output, ids);
+
+    // Graph compilation ///////////////////////////////////////////////////////
+
+    // The G-API graph makes use of a bunch of default ops, but also some custom ones.
+    // Because G-API separates the concept of interface from implementation,
+    // we have to specify the interface (the op, which we did in the graph above)
+    // and the particular implementation of the ops that we use (the kernels, which
+    // we specify here).
+    //
+    // We will need to provide these kernels. The size ones have already been done for you,
+    // but we will need to write up the GOCVParseUnetForSemSeg kernel ourselves.
+    auto kernels = cv::gapi::kernels<cv::gapi::custom::GOCVParseUnetForSemSeg,
+                                     cv::gapi::custom::GOCVSize,
+                                     cv::gapi::custom::GOCVSizeR>();
+
+    // Set up the inputs and outpus of the graph.
+    auto comp = cv::GComputation(cv::GIn(in), std::move(graph_outs));
+
+    // Now compile the graph into a pipeline object that we will use as
+    // an abstract black box that takes in images and outputs images (because this is semantic segmentation).
+    auto compiled_args = cv::compile_args(kernels, cv::gapi::networks(network));
+    auto pipeline = comp.compileStreaming(std::move(compiled_args));
+
+    // Graph execution /////////////////////////////////////////////////////////
+
+    // Select a video source - either the webcam or an input file.
+    if (!video_fpath.empty())
+    {
+        pipeline.setSource(cv::gin(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(video_fpath)));
+    }
+    else
+    {
+        pipeline.setSource(cv::gin(cv::gapi::wip::make_src<cv::gapi::wip::GCaptureSource>(-1)));
+    }
+
+    // Now start the pipeline
+    pipeline.start();
+
+    // Set up all the output nodes.
+    // Each data container needs to match the type of the G-API item that we used as a stand in
+    // in the GOut call above. And the order of these data containers needs to match the order
+    // that we specified in the GOut call above.
+    //
+    // Also, while we only have output from the neural network here, and therefore it doesn't make sense to
+    // make it asynchronous, it is possible to make the G-API graph asynchronous so that each
+    // item is delivered as quickly as it can. In fact, we do this in the Azure Percept azureeyemodule's application
+    // so that we can output the raw RTSP stream at however fast it comes in, regardless of how fast the neural
+    // network is running.
+    //
+    // In synchronous mode (the default), no item is output until all the output nodes have
+    // something to output.
+    cv::Mat out_mat;
+    std::vector<int> out_ids;
+    auto pipeline_outputs = cv::gout(out_mat, out_ids);
+
+    // Pull the information through the compiled graph, filling our output nodes at each iteration.
+    while (pipeline.pull(std::move(pipeline_outputs)))
+    {
+        // Log all the objects that we see. In a more useful application,
+        // we might want to specify the coordinates and maybe the confidences as well,
+        // but for this example, this will suffice.
+        for (const auto &id : out_ids)
+        {
+            const auto label = ((id > 0) && (id < labels.size())) ? labels.at(id) : "Unknown";
+            std::cout << "detected: " << id << ", label: " << label << std::endl;
+        }
+
+        // Display the semantic segmentation color mark-ups.
+        if (show)
+        {
+            cv::imshow("Out", out_mat);
+            cv::waitKey(1);
+        }
+    }
+}
+
+} // namespace semseg
+
+```
+
+### Custom Kernel
+
+Now, if you are like me and have done everything in your power to make sure that your editor can find all the header files and therefore
+has intellisense (or your equivalent) enabled, you will see that we have two red squiggles to take care of:
+
+* `std::tie(colored_output, ids) = cv::gapi::custom::parse_unet_for_semseg(nn, sz);`
+* `auto kernels = cv::gapi::kernels<cv::gapi::custom::GOCVParseUnetForSemSeg,`
+
+We need to provide implementations for `parse_unet_for_semseg` and `GOCVParseUnetForSemSeg`.
+
+The first is a C++ function that will wrap our G-API op. The second is the kernel implementation of the G-API op that we are wrapping.
+Which means we really have three things we need to write:
+
+* A G-API op (essentially a function signature wrapped in some boilerplate)
+* A C++ wrapper for the op (pretty much just boilerplate)
+* A G-API kernel for the op (here's where all the good stuff will be)
+
+Let's knock out the op first, since it is required for the other two.
+
+```C++
+// Put this in mock-eye-app/kernels/unet_semseg_kernels.hpp
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+#pragma once
+
+// Standard libary includes
+#include <tuple>
+#include <vector>
+
+// Third party includes
+#include <opencv2/gapi.hpp>
+#include <opencv2/gapi/cpu/gcpukernel.hpp>
+
+
+namespace cv {
+namespace gapi {
+namespace custom {
+
+/** Type alias for detections along with an image. */
+using GSegmentationAndClasses = std::tuple<GMat, GArray<int>>;
+
+// Op for parsing the output of the U-Net semantic segmentation network.
+// This macro creates a G-API op. Remember, an op is the interface for a G-API "function",
+// which can be written into a G-API graph.
+//
+// Since it is just the interface and not the implementation, we merely describe the input and the
+// output of the operation here, while leaving the actual implementation up to the kernel we will
+// write down below.
+//
+// For a little explanation: the macro takes three arguments:
+// G_API_OP(op name, op function signature, op tag)
+//
+// The op name can be whatever you want. We have adopted the Intel convention of labeling ops
+// GWhatever using camel case. Kernels are also camel case and follow the format GOCVWhatever.
+// C++ wrapper functions use snake_case. Feel free to do whatever you want though.
+//
+// The function signature looks like this <output args(input args)>. Because C++ does not have native
+// support for multiple return values (like Python), we need to wrap the multiple return values into
+// a std::tuple, and we went ahead and aliased it into GSegmentationAndClasses to be more readable.
+// A note about the types: in order to insert an op into a G-API graph, you need to make sure the types
+// are mapped from what you actually want into the G-API type system.
+// G-API types are simple: they have support for primatives, for cv::Mat objects as GMat objects,
+// vectors as GArray objects, and everything else as GOpaque<type>.
+//
+// The tag can be whatever you want, and frankly, I'm not even sure what it's used for...
+G_API_OP(GParseUnetForSemSeg, <GSegmentationAndClasses(GMat, GOpaque<Size>)>, "org.microsoft.gparseunetsemseg")
+{
+    // This boilerplate is required within curly braces following the macro.
+    // You declare a static function called outMeta, which must take in WhateverDesc
+    // versions of the types and output the same thing.
+    //
+    // Notice that we have mapped our inputs from GMat -> GMatDesc and GOpaque<Size> -> GOpaqueDesc
+    // (and added const and reference declaration syntax to them).
+    // We've also changed GMat -> GMatDesc and GArray -> GArrayDesc.
+    static std::tuple<GMatDesc, GArrayDesc> outMeta(const GMatDesc&, const GOpaqueDesc&)
+    {
+        // Just return an empty desc for each of these things.
+        return std::make_tuple(empty_gmat_desc(), empty_array_desc());
+    }
+};
+
+// We'll put more code down here before we close out the namespace
+```
+
+With that boilerplate taken care of, let's create an actual implementation of the op: the kernel.
+
+```C++
+// Same file as above, just put this below the op code.
 ```
 
 ## Label file
