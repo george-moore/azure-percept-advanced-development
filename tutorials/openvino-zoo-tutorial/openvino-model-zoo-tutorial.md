@@ -345,3 +345,37 @@ to be more verbose:
   and output numbers instead of letters.
 
 Let's add the .cpp file now.
+
+```C++
+
+```
+
+## Label file
+
+Since our semantic segmentation network is going to be classifying objects it sees and coloring
+them, it should also write what they are as well. In order to do that, it will need a label file.
+I didn't create this network, so I don't know what the labels are which correspond to the outputs,
+but OpenVINO does: put the following into a labels.txt file.
+
+```
+road
+sidewalk
+building
+wall
+fence
+pole
+traffic light
+traffic sign
+vegetation
+terrain
+sky
+person
+rider
+car
+truck
+bus
+train
+motorcycle
+bicycle
+ego-vehicle
+```
