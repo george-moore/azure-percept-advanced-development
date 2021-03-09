@@ -138,6 +138,8 @@ it whenever the SSD network detects something above a certain confidence thresho
 We didn't bother feeding a labels file into this, so the labels are just numbers. It doesn't matter though,
 since the point is just to make sure it works.
 
+To stop it, hit CTRL-C and then run `docker ps` and `docker stop <whichever-container>`.
+
 If you are curious, you could try the same thing using OpenVINO Model Zoo's `faster_rcnn_resnet50_coco` (parser argument "faster-rcnn"),
 `yolo-v2-tiny-tf` (parser argument "yolo"), or OpenPose (parser argument "openpose"). The first two can be downloaded from the workbench, the OpenPose model
 can be [downloaded from here](https://download.01.org/opencv/2021/openvinotoolkit/2021.1/open_model_zoo/models_bin/1/human-pose-estimation-0001/FP32/).
@@ -151,4 +153,195 @@ The first thing to do is to use the OpenVINO Workbench again. This time, instead
 "semantic", and that should be good enough to find "semantic-segmentation-adas-0001". Import it, download it, and extract it
 into its two files. Put the files somewhere where you won't lose them.
 
-Now let's go through what you will need to do to add support for this model to the mock-eye-app
+Now let's go through what you will need to do to add support for this model to the mock-eye-app. Remember the point of adding
+support for this model to the mock-eye-app is that doing so will put us about halfway towards our real goal of porting
+this model to the Percept application instead. This sandbox application will allow us to run GDB and to feed a movie file
+as an input to the application, while also being a much smaller application that is easier to reason about.
+
+Here are the steps that are needed to add support to the mock-eye-app:
+
+1. Add a new "parser" variant to the enum in mock-eye-app/modules/parser.[c/h]pp,
+   and don't forget to update the `look_up_parser()` function there so the command line can accept your parser as an argument.
+1. Add a folder under `modules` called `segmentation`, and then update the CMakeLists.txt file to include the new folder.
+1. Put all of our runtime logic in the `modules/segmentation` folder, which will include compiling a G-API graph,
+   passing the graph our custom kernels (which we will make in this tutorial), and then running the graph, collecting
+   the graph's outputs, and interpreting them.
+1. Implement whatever custom kernels we need for our G-API graph.
+
+Once we have completed these steps, porting the resulting logic to the Percept DK should be pretty simple, meanwhile, we'll complete all
+of these steps on our host PC, which should make development quite a bit more comfortable.
+
+Let's go through these steps one at a time.
+
+### Parser Enum
+
+In order to integrate our new model (and its post-processing logic - i.e., "parser") into the mock app, we need to tell the command line
+arguments and the main function that we have a new AI model that we can accept.
+
+Let's start by updating the enum and look-up function in `mock-eye-module/modules/parser.hpp` and `mock-eye-module/modules/parser.cpp`:
+
+First, here's the .hpp file:
+
+```C++
+// The contents of this enum may have changed by the time you read this,
+// because maybe I forgot to update this documentation. But either way,
+// find this enum and update it to include "UNET_SEM_SEG" or whatever you want to call it.
+enum class Parser {
+    FASTER_RCNN,
+    OPENPOSE,
+    SSD100,
+    SSD200,
+    // Here's the new item
+    UNET_SEM_SEG,
+    YOLO
+};
+```
+
+Next, here's the .cpp file:
+
+```C++
+Parser look_up_parser(const std::string &parser_str)
+{
+    if (parser_str == "openpose")
+    {
+        return Parser::OPENPOSE;
+    }
+    else if (parser_str == "ssd100")
+    {
+        return Parser::SSD100;
+    }
+    else if (parser_str == "ssd200")
+    {
+        return Parser::SSD200;
+    }
+    else if (parser_str == "yolo")
+    {
+        return Parser::YOLO;
+    }
+    else if (parser_str == "faster-rcnn")
+    {
+        return Parser::FASTER_RCNN;
+    }
+    else if (parser_str == "unet-seg") ///////// This is the new one
+    {                                  /////////
+        return Parser::UNET_SEM_SEG;   /////////
+    }                                  /////////
+    else
+    {
+        std::cerr << "Given " << parser_str << " for --parser, but we do not support it." << std::endl;
+        exit(-1);
+    }
+}
+```
+
+Now update main.cpp:
+
+```C++
+// .... other code
+
+/** Arguments for this program (short-arg long-arg | default-value | help message) */
+static const std::string keys =
+"{ h help    |        | Print this message }"
+"{ d device  | CPU    | Device to run inference on. Options: CPU, GPU, NCS2 }"
+"{ p parser  | ssd100 | Parser kind required for input model. Possible values: ssd100, ssd200, yolo, openpose, faster-rcnn, unet-seg }" // Update the help message
+"{ w weights |        | Weights file }"
+"{ x xml     |        | Network XML file }"
+"{ labels    |        | Path to the labels file }"
+"{ show      | false  | Show output BGR image. Requires graphical environment }"
+"{ video_in  |        | If given, we use this file as input instead of the camera }";
+
+// .... clip some more code
+
+// Here we are in main():
+    std::vector<std::string> classes;
+    switch (parser)
+    {
+        case parser::Parser::OPENPOSE:
+            pose::compile_and_run(video_in, xml, weights, dev, show);
+            break;
+        case parser::Parser::SSD100:  // Fall-through
+        case parser::Parser::SSD200:  // Fall-through
+        case parser::Parser::YOLO:
+            classes = load_label(labelfile);
+            detection::compile_and_run(video_in, parser, xml, weights, dev, show, classes);
+            break;
+        case parser::Parser::FASTER_RCNN:
+            classes = load_label(labelfile);
+            detection::rcnn::compile_and_run(video_in, xml, weights, dev, show, classes);
+            break;
+        case parser::Parser::UNET_SEM_SEG:                                        // NEW CODE
+            classes = load_label(labelfile);                                      // NEW CODE
+            semseg::compile_and_run(video_in, xml, weights, dev, show, classes);  // NEW CODE
+            break;                                                                // NEW CODE
+        default:
+            std::cerr << "Programmer error: Please implement the appropriate logic for this Parser." << std::endl;
+            exit(__LINE__);
+    }
+```
+
+So now we've updated all the logic we need to route the application's flow to the right place if the user executes
+this application with the `--parser unet-seg` argument.
+
+Of course, this won't compile yet, since we don't have a `semseg` at all, let alone a `compile_and_run` function in it.
+So let's code up that function now.
+
+### Modules/Segmentation
+
+Create a folder where we will put all of our semantic segmentation code: `mkdir modules/segmentation`.
+
+Now let's create the header file, which will be entirely boilerplate:
+
+```C++
+// Put this in a file called mock-eye-module/modules/segmentation/unet_semseg.hpp
+
+/**
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+#pragma once
+
+// Standard library includes
+#include <string>
+#include <vector>
+
+// Our includes
+#include "../device.hpp"
+#include "../parser.hpp"
+
+namespace semseg {
+
+/**
+ * Compiles the GAPI graph for a semantic segmentation model (U-Net, specifically) and runs the application. This method never returns.
+ *
+ * @param video_fpath: If given, we run the model on the given movie. If empty, we use the webcam.
+ * @param modelfpath: The path to the model's .xml file.
+ * @param weightsfpath: The path to the model's .bin file.
+ * @param device: What device we should run on.
+ * @param show: If true, we display the results.
+ * @param labels: The labels this model was built to detect.
+ */
+void compile_and_run(const std::string &video_fpath, const std::string &modelfpath, const std::string &weightsfpath, const device::Device &device, bool show, const std::vector<std::string> &labels);
+
+} // namespace semseg
+```
+
+How did I know that that's the code I should put in the header? By looking at `modules/objectdetection/faster_rcnn.hpp`.
+
+Each of the arguments to the single function that we need to implement is explained in the header file, but
+to be more verbose:
+
+* `video_fpath`: Must be a valid path to a video file. Note that on Windows, the webcam won't work - only video files are supported.
+* `modelfpath`: The path to the model's .xml file. Remember that each model is in the OpenVINO IR format, and therefore is composed
+  of a topology (.xml) file and a weights (.bin) file.
+* `weightsfpath`: The path to the model's .bin file.
+* `device`: We haven't talked about devices. If you are curious, you can check in the device module, but the gist of it is that since the Inference Engine
+  OpenCV back end we use in this application supports GPUs, Myriad X VPUs, and CPUs, I figured we could just support all of them. Unfortunately for Windows
+  users, only CPU is supported.
+* `show`: We don't need to show the GUI, but it is cool (and helpful for debugging). You could certainly get a way with just using
+  `std::cout` messages.
+* `labels`: Our U-Net model is trained to do semantic segmentation on particular items. If we don't give this over to the function,
+  we'll make sure that the function just displays numbers instead of labels, so it is technically optional. Nonetheless, we'll pass something in either way,
+  and if the function can't find the given file (perhaps because it is just an empty string, and not a file path at all), then we'll ignore this arg
+  and output numbers instead of letters.
+
+Let's add the .cpp file now.
