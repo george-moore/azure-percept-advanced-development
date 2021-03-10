@@ -13,6 +13,7 @@ import numpy as np
 import os
 import PIL.Image
 import random
+import shutil
 import tensorflow as tf
 import wget
 import zipfile
@@ -125,12 +126,20 @@ def dreamify_image_at_path(imgfpath, dream_model, steps_per_octave=100, step_siz
             img = img + gradients * step_size
             img = tf.clip_by_value(img, -1, 1)
 
+            # Uncomment to watch it dreamify
+            #if step % 10 == 0:
+            #    import matplotlib.pyplot as plt
+            #    plt.imshow(PIL.Image.fromarray(np.array(deprocess(img))))
+            #    plt.show()
+
     result = deprocess(img)
+    result = PIL.Image.fromarray(np.array(result))
     return result
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--nimgs", "-n", type=int, default=1000, help="Number of images to take from the COCO dataset.")
+    parser.add_argument("--nvalimgs", "-v", type=int, default=250, help="Number of images to take from the COCO dataset and use as validation split.")
     parser.add_argument("--seed", type=int, default=2436, help="Random seed. We take images at random from COCO.")
     parser.add_argument("--coco", type=str, default=None, help="If given, should be a path to the COCO dataset, otherwise we will download it.")
     parser.add_argument("--destination", "-d", type=str, default="coco-dreamified", help="We will make this directory. This should either not exist or be empty if it does.")
@@ -169,13 +178,28 @@ if __name__ == "__main__":
 
     # Read in all file paths
     original_img_fpaths = [os.path.join(os.path.abspath(cocopath), fname) for fname in os.listdir(cocopath)]
+    random.shuffle(original_img_fpaths)
 
     # Randomly choose however many images from the file paths
-    original_img_fpaths = [random.choice(original_img_fpaths) for _ in range(args.nimgs)]
+    original_train_img_fpaths = original_img_fpaths[:args.nimgs]
+    original_val_img_fpaths = original_img_fpaths[args.nimgs:(args.nimgs + args.nvalimgs)]
+    del original_img_fpaths  # hint to the interpretor to free up some memory
 
     # Create an output location
     if not os.path.exists(args.destination):
         os.mkdir(args.destination)
+
+    # Create the train and val splits inside the destination
+    raw_tmp_path = os.path.join(args.destination, "A")
+    raw_tmp_train_path = os.path.join(raw_tmp_path, "train")
+    raw_tmp_val_path = os.path.join(raw_tmp_path, "val")
+    dream_tmp_path = os.path.join(args.destination, "B")
+    dream_tmp_train_path = os.path.join(dream_tmp_path, "train")
+    dream_tmp_val_path = os.path.join(dream_tmp_path, "val")
+    os.makedirs(raw_tmp_train_path)
+    os.makedirs(raw_tmp_val_path)
+    os.makedirs(dream_tmp_train_path)
+    os.makedirs(dream_tmp_val_path)
 
     # Get an Inception V3 model to excite by optimizing the images we feed it. Optimization of the
     # images with respect to this model's specified layers is what causes the cool effects in the images.
@@ -184,10 +208,24 @@ if __name__ == "__main__":
     layers = [base_model.get_layer(name).output for name in names]
     dream_model = tf.keras.Model(inputs=base_model.input, outputs=layers)
 
-    # For each file, dreamify it and save it into the location
-    for inputfpath in tqdm(original_img_fpaths):
+    # For each file, dreamify it and save both the original and the dreamified one
+    print("Dreamifying the training split. This will take a while.")
+    for inputfpath in tqdm(original_train_img_fpaths):
         dreamified_img = dreamify_image_at_path(inputfpath, dream_model)
 
         name = os.path.basename(inputfpath)
-        save_to_path = os.path.join(args.destination, name)
+        save_to_path = os.path.join(dream_tmp_train_path, name)
         dreamified_img.save(save_to_path)
+
+        shutil.copyfile(inputfpath, os.path.join(raw_tmp_train_path, name))
+
+    # Do the same for the validation split
+    print("Dreamifying the validation split. This will take a while.")
+    for inputfpath in tqdm(original_val_img_fpaths):
+        dreamified_img = dreamify_image_at_path(inputfpath, dream_model)
+
+        name = os.path.basename(inputfpath)
+        save_to_path = os.path.join(dream_tmp_val_path, name)
+        dreamified_img.save(save_to_path)
+
+        shutil.copyfile(inputfpath, os.path.join(raw_tmp_val_path, name))
