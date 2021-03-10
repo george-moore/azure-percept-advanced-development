@@ -985,4 +985,10 @@ So I think we can narrow this down to a handful of possibilities:
 1. `parse_unet_for_semseg()` has a problem with `nn` or with `sz`.
 1. `parse_unet_for_semseg()` is outputting something with an incorrect type.
 
-Let's try removing both of these problematic ops from the graph and see if everything works:
+Let's try removing both of these problematic ops from the graph and see if everything works.
+I'll leave it as an exercise for you to do that, but it does indeed work just fine. So that
+confirms that most of this all works. The problem is somewhere in the G-API graph having to do with
+the `infer()` or the `parse_unet_for_semseg()` functions.
+
+So let's try adding the `infer()` function back in, and just pass its output straight out of the graph,
+rather than feeding it into the parser function. Again, I'll leave this as an exercise for the reader.

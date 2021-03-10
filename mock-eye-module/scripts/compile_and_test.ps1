@@ -110,6 +110,10 @@ if ($video) {
     $appcmd += " --video_in=" + $videofile
 }
 
+if ($labels) {
+    $appcmd += " --labels=" + $labelfile
+}
+
 # Should we debug?
 $dockercmd = ""
 $debug_docker_cmd = ""
