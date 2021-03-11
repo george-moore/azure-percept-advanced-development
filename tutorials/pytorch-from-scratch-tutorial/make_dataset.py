@@ -18,6 +18,9 @@ import tensorflow as tf
 import wget
 import zipfile
 import tensorflow as tf
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+  tf.config.experimental.set_memory_growth(gpu, True)
 
 def random_roll(img, maxroll):
     """
@@ -104,12 +107,12 @@ def load_img(fpath, max_dim=None):
         img.thumbnail((max_dim, max_dim))
     return np.array(img)
 
-def dreamify_image_at_path(imgfpath, dream_model, steps_per_octave=100, step_size=0.01, octaves=range(-2,3), octave_scale=1.3):
+def dreamify_image_at_path(imgfpath, dream_model, max_dim, steps_per_octave=100, step_size=0.01, octaves=range(-2,3), octave_scale=1.3):
     """
     Deep dreamify the given image.
     """
     get_tiled_gradients = TiledGradients(dream_model)
-    img = load_img(imgfpath, max_dim=500)
+    img = load_img(imgfpath, max_dim=max_dim)
     base_shape = tf.shape(img)
     img = tf.keras.preprocessing.image.img_to_array(img)
     img = tf.keras.applications.inception_v3.preprocess_input(img)
@@ -143,6 +146,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=2436, help="Random seed. We take images at random from COCO.")
     parser.add_argument("--coco", type=str, default=None, help="If given, should be a path to the COCO dataset, otherwise we will download it.")
     parser.add_argument("--destination", "-d", type=str, default="coco-dreamified", help="We will make this directory. This should either not exist or be empty if it does.")
+    parser.add_argument("--continue", action='store_true', dest="continue_mode", help="If given, we will pick up where we left off previously. Requires that this random seed and last time's random seed matches, otherwise you may end up with duplicates or mixing training and validation.")
+    parser.add_argument("--max-dim", type=int, default=500, help="The maximum dimensions of the images (we will resize to this if larger in any dimension).")
     args = parser.parse_args()
 
     # Seed
@@ -153,13 +158,17 @@ if __name__ == "__main__":
         print("Need --nimgs to be >= 0, but is", args.nimgs)
         exit(1)
 
+    if args.nvalimgs <= 0:
+        print("Need --nvalimgs to be >= 0, but is", args.nvalimg)
+        exit(2)
+
     # Make sure the output directory is actually a directory if it exists
     if os.path.exists(args.destination) and not os.path.isdir(args.destination):
         print("There is a file called", args.destination, "and we need to make a directory called that.")
         exit(3)
 
-    # Make sure the output directory is empty if it exists
-    if os.path.isdir(args.destination) and os.listdir(args.destination):
+    # If we are not running in continue mode, make sure the output directory is empty if it exists
+    if not args.continue_mode and (os.path.isdir(args.destination) and os.listdir(args.destination)):
         print("The directory we are putting our images into is not empty and it should be. Given", args.destination)
         exit(2)
 
@@ -196,10 +205,26 @@ if __name__ == "__main__":
     dream_tmp_path = os.path.join(args.destination, "B")
     dream_tmp_train_path = os.path.join(dream_tmp_path, "train")
     dream_tmp_val_path = os.path.join(dream_tmp_path, "val")
-    os.makedirs(raw_tmp_train_path)
-    os.makedirs(raw_tmp_val_path)
-    os.makedirs(dream_tmp_train_path)
-    os.makedirs(dream_tmp_val_path)
+    os.makedirs(raw_tmp_train_path, exist_ok=True)
+    os.makedirs(raw_tmp_val_path, exist_ok=True)
+    os.makedirs(dream_tmp_train_path, exist_ok=True)
+    os.makedirs(dream_tmp_val_path, exist_ok=True)
+
+    # Now adjust the images if we are running in continue mode
+    if args.continue_mode:
+        ntrained_so_far = len(os.listdir(dream_tmp_train_path))
+        nval_so_far = len(os.listdir(dream_tmp_val_path))
+        done_training = ntrained_so_far >= len(original_train_img_fpaths)
+        done_validating = nval_so_far >= len(original_val_img_fpaths)
+        if done_training and done_validating:
+            print("Nothing needs to be done. Continuation mode is on and we already have all the training images.")
+            exit()
+
+        if not done_training:
+            original_train_img_fpaths = original_train_img_fpaths[ntrained_so_far:]
+
+        if not done_validating:
+            original_val_img_fpaths = original_val_img_fpaths[nval_so_far:]
 
     # Get an Inception V3 model to excite by optimizing the images we feed it. Optimization of the
     # images with respect to this model's specified layers is what causes the cool effects in the images.
@@ -211,21 +236,33 @@ if __name__ == "__main__":
     # For each file, dreamify it and save both the original and the dreamified one
     print("Dreamifying the training split. This will take a while.")
     for inputfpath in tqdm(original_train_img_fpaths):
-        dreamified_img = dreamify_image_at_path(inputfpath, dream_model)
+        try:
+            # Dreamify the image
+            dreamified_img = dreamify_image_at_path(inputfpath, dream_model, args.max_dim)
 
-        name = os.path.basename(inputfpath)
-        save_to_path = os.path.join(dream_tmp_train_path, name)
-        dreamified_img.save(save_to_path)
+            # Save it to the right place
+            name = os.path.basename(inputfpath)
+            save_to_path = os.path.join(dream_tmp_train_path, name)
+            dreamified_img.save(save_to_path)
 
-        shutil.copyfile(inputfpath, os.path.join(raw_tmp_train_path, name))
+            # Copy the original
+            shutil.copyfile(inputfpath, os.path.join(raw_tmp_val_path, name))
+        except ValueError:
+            print("Hit a value error on", inputfpath, "so skipping.")
 
     # Do the same for the validation split
     print("Dreamifying the validation split. This will take a while.")
     for inputfpath in tqdm(original_val_img_fpaths):
-        dreamified_img = dreamify_image_at_path(inputfpath, dream_model)
+        try:
+            # Dreamify the image
+            dreamified_img = dreamify_image_at_path(inputfpath, dream_model)
 
-        name = os.path.basename(inputfpath)
-        save_to_path = os.path.join(dream_tmp_val_path, name)
-        dreamified_img.save(save_to_path)
+            # Save it to the right place
+            name = os.path.basename(inputfpath)
+            save_to_path = os.path.join(dream_tmp_val_path, name)
+            dreamified_img.save(save_to_path)
 
-        shutil.copyfile(inputfpath, os.path.join(raw_tmp_val_path, name))
+            # Copy the original
+            shutil.copyfile(inputfpath, os.path.join(raw_tmp_val_path, name))
+        except ValueError:
+            print("Hit a value error on", inputfpath, "so skipping.")
