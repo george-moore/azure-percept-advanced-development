@@ -349,7 +349,7 @@ if __name__ == "__main__":
     # !python train.py --dataroot ./datasets/facades --name facades_pix2pix --model pix2pix --direction AtoB
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", "-d", type=str, default="coco-dreamified", help="The root of the dataset.")
-    parser.add_argumentd("--save", "-s", type=str, default="dream-pix2pix-tf", help="Directory where we will save our model.")
+    parser.add_argument("--save", "-s", type=str, default="dream-pix2pix-tf", help="Directory where we will save our model.")
     args = parser.parse_args()
 
     # Check if the dataset exists
