@@ -4,7 +4,9 @@ Taken (with modifications) from https://www.tensorflow.org/tutorials/generative/
 """
 import argparse
 import datetime
+import matplotlib.pyplot as plt
 import os
+import shutil
 import time
 import tensorflow as tf
 
@@ -190,7 +192,7 @@ def construct_generator():
 
     return tf.keras.Model(inputs=inputs, outputs=x)
 
-def generator_loss(disc_generated_output, gen_output, target):
+def generator_loss(disc_generated_output, gen_output, target, loss_object):
     """
     The loss for the generator is GAN_loss + (lambda * L1 loss),
     where the L1 loss is the L1 distance between the ground truth
@@ -263,7 +265,7 @@ def generate_images(model, test_input, tar):
     plt.show()
 
 @tf.function
-def train_step(input_image, target, epoch, summary_writer):
+def train_step(input_image, target, epoch, summary_writer, generator, discriminator, loss_object, generator_optimizer, discriminator_optimizer):
     """
                                    target_img ->|
     A single step of input_image -> Generator -> Discriminator -> backprop all the way back.
@@ -274,8 +276,8 @@ def train_step(input_image, target, epoch, summary_writer):
         disc_real_output = discriminator([input_image, target], training=True)
         disc_generated_output = discriminator([input_image, gen_output], training=True)
 
-        gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
-        disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
+        gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target, loss_object)
+        disc_loss = discriminator_loss(disc_real_output, disc_generated_output, loss_object)
 
     generator_gradients = gen_tape.gradient(gen_total_loss, generator.trainable_variables)
     discriminator_gradients = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
@@ -289,7 +291,7 @@ def train_step(input_image, target, epoch, summary_writer):
         tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=epoch)
         tf.summary.scalar('disc_loss', disc_loss, step=epoch)
 
-def fit(train_ds, epochs, test_ds, summary_writer):
+def fit(train_ds, epochs, test_ds, summary_writer, generator, discriminator, loss_object, generator_optimizer, discriminator_optimizer, checkpoint, checkpoint_prefix):
     """
     The training loop.
     """
@@ -305,7 +307,7 @@ def fit(train_ds, epochs, test_ds, summary_writer):
             print('.', end='')
             if (n + 1) % 100 == 0:
                 print()
-            train_step(input_image, target, epoch, summary_writer)
+            train_step(input_image, target, epoch, summary_writer, generator, discriminator, loss_object, generator_optimizer, discriminator_optimizer)
         print()
 
         # saving (checkpoint) the model every 20 epochs
@@ -323,14 +325,18 @@ def train(dataset_dpath):
     BATCH_SIZE = 1
     EPOCHS = 150
 
+    # If dataset_dpath does not have an ending slash, we need one
+    if not dataset_dpath.endswith(os.path.sep):
+        dataset_dpath += os.path.sep
+
     # Training dataset
     train_dataset = tf.data.Dataset.list_files(dataset_dpath + 'train/*.jpg')
-    train_dataset = train_dataset.map(load_image_train, num_parallel_calls=tf.data.AUTOTUNE)
+    train_dataset = train_dataset.map(load_image_train, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     train_dataset = train_dataset.shuffle(BUFFER_SIZE)
     train_dataset = train_dataset.batch(BATCH_SIZE)
 
     # Testing dataset
-    test_dataset = tf.data.Dataset.list_files(dataset_dpath + 'test/*.jpg')
+    test_dataset = tf.data.Dataset.list_files(dataset_dpath + 'val/*.jpg')
     test_dataset = test_dataset.map(load_image_test)
     test_dataset = test_dataset.batch(BATCH_SIZE)
 
@@ -356,7 +362,7 @@ def train(dataset_dpath):
     summary_writer = tf.summary.create_file_writer(
     log_dir + "fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
 
-    fit(train_dataset, EPOCHS, test_dataset, summary_writer)
+    fit(train_dataset, EPOCHS, test_dataset, summary_writer, generator, discriminator, loss_object, generator_optimizer, discriminator_optimizer, checkpoint, checkpoint_prefix)
 
     return generator
 
@@ -364,19 +370,18 @@ if __name__ == "__main__":
     # !python train.py --dataroot ./datasets/facades --name facades_pix2pix --model pix2pix --direction AtoB
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", "-d", type=str, default="coco-dreamified", help="The root of the dataset.")
+    parser.add_argumentd("--save", "-s", type=str, default="dream-pix2pix-tf", help="Directory where we will save our model.")
     args = parser.parse_args()
-
-    # Don't overwrite a model that already exists.
-    if os.path.exists(args.modelout):
-        print("Model already exists at", args.modelout, "so backing off.")
-        exit(1)
 
     # Check if the dataset exists
     if not os.path.isdir(args.dataset):
         print("Can't find the given dataset root. Given:", args.dataset)
-        exit(2)
+        exit(1)
 
     # Train
-    model = train(dataset)
-    os.mkdir("dream-pix2pix-tf")
-    generator.save("dream-pix2pix-tf/dream-pix2pix-tf")
+    generator = train(args.dataset)
+    dpath = args.save
+    if os.path.exists(dpath):
+        shutil.rmtree(dpath)
+    os.mkdir(dpath)
+    generator.save(os.path.join(args.save, "dream-pix2pix-tf"))
