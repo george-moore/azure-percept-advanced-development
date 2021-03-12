@@ -4,7 +4,6 @@ Taken (with modifications) from https://www.tensorflow.org/tutorials/generative/
 """
 import argparse
 import datetime
-import matplotlib.pyplot as plt
 import os
 import shutil
 import time
@@ -247,23 +246,6 @@ def discriminator_loss(disc_real_output, disc_generated_output, loss_object):
 
     return total_disc_loss
 
-def generate_images(model, test_input, tar):
-    """
-    """
-    prediction = model(test_input, training=True)
-    plt.figure(figsize=(15,15))
-
-    display_list = [test_input[0], tar[0], prediction[0]]
-    title = ['Input Image', 'Ground Truth', 'Predicted Image']
-
-    for i in range(3):
-        plt.subplot(1, 3, i+1)
-        plt.title(title[i])
-        # getting the pixel values between [0, 1] to plot it.
-        plt.imshow(display_list[i] * 0.5 + 0.5)
-        plt.axis('off')
-    plt.show()
-
 @tf.function
 def train_step(input_image, target, epoch, summary_writer, generator, discriminator, loss_object, generator_optimizer, discriminator_optimizer):
     """
@@ -297,9 +279,6 @@ def fit(train_ds, epochs, test_ds, summary_writer, generator, discriminator, los
     """
     for epoch in range(epochs):
         start = time.time()
-
-        for example_input, example_target in test_ds.take(1):
-            generate_images(generator, example_input, example_target)
 
         # Train
         print("Epoch: ", epoch)
